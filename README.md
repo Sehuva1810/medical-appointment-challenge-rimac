@@ -4,8 +4,6 @@ API serverless para agendar citas médicas. Soporta asegurados de Perú y Chile.
 
 ## Arquitectura
 
-El flujo es así:
-
 ```
 POST /appointments
        │
@@ -34,7 +32,7 @@ POST /appointments
     └────┬────┘
          ▼
 ┌─────────────────┐
-│  MySQL (RDS)    │  ← Base de datos por país
+│  MySQL (RDS)    │  ← Guarda en BD por país
 └────────┬────────┘
          │
          ▼
@@ -61,61 +59,43 @@ POST /appointments
 - DynamoDB + MySQL
 - SNS, SQS, EventBridge
 
-## Cómo correrlo
-
-### Instalación
-
-```bash
-npm install
-```
-
-### Opción rápida (solo endpoints)
-
-Si solo quieres probar los endpoints sin todo el flujo de AWS:
-
-```bash
-npm run offline
-```
-
-Y en otra terminal:
-```bash
-curl -X POST http://localhost:3000/dev/appointments \
-  -H "Content-Type: application/json" \
-  -d '{"insuredId": "00001", "scheduleId": 100, "countryISO": "PE"}'
-```
-
-### Opción completa con Docker (recomendado)
-
-Esto levanta LocalStack (emula servicios AWS) y MySQL.
+## Cómo correrlo en local
 
 **Requisitos:**
 - Docker y Docker Compose
-- Node.js 18+ (yo uso Node 22)
+- Node.js 18+
 - AWS CLI
+
+**Windows:** Usar Git Bash para correr los comandos.
 
 **Pasos:**
 
 ```bash
-# Levantar todo (el .env ya viene configurado)
+npm install
 npm run start:local
 ```
 
-Eso inicia Docker, crea las tablas en DynamoDB, el topic SNS, y arranca el servidor.
+Eso levanta todo automáticamente: Docker (LocalStack + MySQL), crea las tablas en DynamoDB, el topic SNS, y arranca el servidor en `http://localhost:3000/local`.
 
-**Para probar:**
+**Probar los endpoints:**
+
 ```bash
-# En otra terminal
-./scripts/test-local.sh
+# Crear cita
+curl -X POST http://localhost:3000/local/appointments \
+  -H "Content-Type: application/json" \
+  -d '{"insuredId": "00001", "scheduleId": 100, "countryISO": "PE"}'
+
+# Consultar citas
+curl http://localhost:3000/local/appointments/00001
 ```
 
-O si quieres probar el flujo completo end-to-end:
+**Probar el flujo completo (E2E):**
+
 ```bash
 npm run test:e2e
 ```
 
-**Nota para Windows:** Los scripts .sh no corren directo en Windows. Usa Git Bash o WSL. O simplemente prueba los endpoints con Postman.
-
-### Detener todo
+**Detener todo:**
 
 ```bash
 npm run docker:down
@@ -170,14 +150,10 @@ Obtiene las citas de un asegurado.
 - `countryISO`: solo "PE" o "CL"
 - `scheduleId`: número
 
-## Tests
+## Tests unitarios
 
 ```bash
-# Tests unitarios
 npm test
-
-# Con cobertura
-npm test -- --coverage
 ```
 
 ## Estructura del proyecto
@@ -192,30 +168,9 @@ src/
 └── interfaces/       # Handlers de Lambda
 ```
 
-## Deploy
+## Deploy a AWS
 
 ```bash
-# Dev
 npm run deploy:dev
-
-# Prod
 npm run deploy:prod
 ```
-
-## Variables de entorno
-
-Para producción necesitas configurar en `.env`:
-
-```
-RDS_PE_HOST=...
-RDS_PE_DATABASE=medical_appointments_pe
-RDS_PE_USERNAME=...
-RDS_PE_PASSWORD=...
-
-RDS_CL_HOST=...
-RDS_CL_DATABASE=medical_appointments_cl
-RDS_CL_USERNAME=...
-RDS_CL_PASSWORD=...
-```
-
-Para local ya viene el `.env` configurado, no necesitas hacer nada.
