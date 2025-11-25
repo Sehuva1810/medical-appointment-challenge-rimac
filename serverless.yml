@@ -1,0 +1,347 @@
+service: medical-appointment-api
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  memorySize: 256
+  timeout: 30
+  environment:
+    STAGE: ${self:provider.stage}
+    DYNAMODB_TABLE: ${self:service}-appointments-${self:provider.stage}
+    SNS_TOPIC_ARN: ${env:SNS_TOPIC_ARN, 'arn:aws:sns:us-east-1:000000000000:${self:service}-appointments-${self:provider.stage}'}
+    SQS_CONFIRMATION_URL: ${env:SQS_CONFIRMATION_URL, ''}
+    EVENTBRIDGE_BUS_NAME: ${self:service}-bus-${self:provider.stage}
+    # LocalStack endpoints (only used when running locally)
+    DYNAMODB_ENDPOINT: ${env:DYNAMODB_ENDPOINT, ''}
+    LOCALSTACK_ENDPOINT: ${env:LOCALSTACK_ENDPOINT, ''}
+    # RDS Configuration - Peru
+    RDS_PE_HOST: ${env:RDS_PE_HOST, 'localhost'}
+    RDS_PE_PORT: ${env:RDS_PE_PORT, '3306'}
+    RDS_PE_DATABASE: ${env:RDS_PE_DATABASE, 'medical_appointments_pe'}
+    RDS_PE_USERNAME: ${env:RDS_PE_USERNAME, 'admin'}
+    RDS_PE_PASSWORD: ${env:RDS_PE_PASSWORD, 'password'}
+    # RDS Configuration - Chile
+    RDS_CL_HOST: ${env:RDS_CL_HOST, 'localhost'}
+    RDS_CL_PORT: ${env:RDS_CL_PORT, '3306'}
+    RDS_CL_DATABASE: ${env:RDS_CL_DATABASE, 'medical_appointments_cl'}
+    RDS_CL_USERNAME: ${env:RDS_CL_USERNAME, 'admin'}
+    RDS_CL_PASSWORD: ${env:RDS_CL_PASSWORD, 'password'}
+  
+  iam:
+    role:
+      statements:
+        # DynamoDB permissions
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - !GetAtt AppointmentsTable.Arn
+            - !Sub "${AppointmentsTable.Arn}/index/*"
+        # SNS permissions
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            - !Ref AppointmentTopic
+        # SQS permissions
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - !GetAtt QueuePE.Arn
+            - !GetAtt QueueCL.Arn
+            - !GetAtt ConfirmationQueue.Arn
+        # EventBridge permissions
+        - Effect: Allow
+          Action:
+            - events:PutEvents
+          Resource:
+            - !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${self:service}-bus-${self:provider.stage}"
+
+plugins:
+  - serverless-plugin-typescript
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    httpPort: 3000
+    lambdaPort: 3002
+
+functions:
+  # =============================================================================
+  # LAMBDA: appointment
+  # Handles: POST /appointments, GET /appointments/{insuredId}, SQS Confirmation
+  # =============================================================================
+  
+  # POST /appointments - Step 1: Save to DynamoDB + Publish to SNS
+  appointment:
+    handler: src/interfaces/handlers/appointment.createHandler
+    events:
+      - http:
+          path: /appointments
+          method: post
+          cors: true
+    description: "[appointment] Creates a new appointment request (Step 1-2)"
+
+  # GET /appointments/{insuredId} - List appointments by insured ID
+  appointmentGet:
+    handler: src/interfaces/handlers/appointment.getByInsuredIdHandler
+    events:
+      - http:
+          path: /appointments/{insuredId}
+          method: get
+          cors: true
+          request:
+            parameters:
+              paths:
+                insuredId: true
+    description: "[appointment] Gets appointments by insured ID"
+
+  # Step 6: Read from SQS confirmation and update DynamoDB to "completed"
+  appointmentConfirmation:
+    handler: src/interfaces/handlers/appointment.confirmationHandler
+    events:
+      - sqs:
+          arn: !GetAtt ConfirmationQueue.Arn
+          batchSize: 1
+    description: "[appointment] Updates appointment status to completed (Step 6)"
+
+  # =============================================================================
+  # LAMBDA: appointment_pe - Step 4: Process Peru appointments
+  # =============================================================================
+  appointment_pe:
+    handler: src/interfaces/handlers/countryProcessor.peHandler
+    events:
+      - sqs:
+          arn: !GetAtt QueuePE.Arn
+          batchSize: 1
+    description: "[appointment_pe] Processes appointments for Peru (Step 4-5)"
+
+  # =============================================================================
+  # LAMBDA: appointment_cl - Step 4: Process Chile appointments
+  # =============================================================================
+  appointment_cl:
+    handler: src/interfaces/handlers/countryProcessor.clHandler
+    events:
+      - sqs:
+          arn: !GetAtt QueueCL.Arn
+          batchSize: 1
+    description: "[appointment_cl] Processes appointments for Chile (Step 4-5)"
+
+resources:
+  Resources:
+    # DynamoDB Table
+    AppointmentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_TABLE}
+        AttributeDefinitions:
+          - AttributeName: appointmentId
+            AttributeType: S
+          - AttributeName: insuredId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: appointmentId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: insuredId-createdAt-index
+            KeySchema:
+              - AttributeName: insuredId
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        BillingMode: PAY_PER_REQUEST
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+
+    # SNS Topic with filter policy for country routing
+    AppointmentTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-appointments-${self:provider.stage}
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+
+    # SQS Queue for Peru
+    QueuePE:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-queue-pe-${self:provider.stage}
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 1209600
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt DeadLetterQueuePE.Arn
+          maxReceiveCount: 3
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+          - Key: Country
+            Value: PE
+
+    # Dead Letter Queue for Peru
+    DeadLetterQueuePE:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-dlq-pe-${self:provider.stage}
+        MessageRetentionPeriod: 1209600
+
+    # SQS Queue for Chile
+    QueueCL:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-queue-cl-${self:provider.stage}
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 1209600
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt DeadLetterQueueCL.Arn
+          maxReceiveCount: 3
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+          - Key: Country
+            Value: CL
+
+    # Dead Letter Queue for Chile
+    DeadLetterQueueCL:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-dlq-cl-${self:provider.stage}
+        MessageRetentionPeriod: 1209600
+
+    # SNS Subscription for Peru with filter
+    SNSSubscriptionPE:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref AppointmentTopic
+        Protocol: sqs
+        Endpoint: !GetAtt QueuePE.Arn
+        FilterPolicy:
+          countryISO:
+            - PE
+        RawMessageDelivery: true
+
+    # SNS Subscription for Chile with filter
+    SNSSubscriptionCL:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref AppointmentTopic
+        Protocol: sqs
+        Endpoint: !GetAtt QueueCL.Arn
+        FilterPolicy:
+          countryISO:
+            - CL
+        RawMessageDelivery: true
+
+    # SQS Policy to allow SNS to send messages
+    QueuePEPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref QueuePE
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt QueuePE.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
+
+    QueueCLPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref QueueCL
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt QueueCL.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
+
+    # EventBridge Event Bus
+    AppointmentEventBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:service}-bus-${self:provider.stage}
+
+    # Confirmation Queue (receives from EventBridge)
+    ConfirmationQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-confirmation-${self:provider.stage}
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 1209600
+
+    # EventBridge Rule to route to Confirmation Queue
+    ConfirmationRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: ${self:service}-confirmation-rule-${self:provider.stage}
+        EventBusName: !Ref AppointmentEventBus
+        EventPattern:
+          source:
+            - "appointment.service"
+          detail-type:
+            - "AppointmentCompleted"
+        State: ENABLED
+        Targets:
+          - Id: ConfirmationQueueTarget
+            Arn: !GetAtt ConfirmationQueue.Arn
+
+    # Allow EventBridge to send to Confirmation Queue
+    ConfirmationQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref ConfirmationQueue
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt ConfirmationQueue.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !GetAtt ConfirmationRule.Arn
+
+  Outputs:
+    ApiEndpoint:
+      Description: API Gateway endpoint URL
+      Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}"
+    DynamoDBTable:
+      Description: DynamoDB Table Name
+      Value: !Ref AppointmentsTable
+    SNSTopic:
+      Description: SNS Topic ARN
+      Value: !Ref AppointmentTopic
+    QueuePEUrl:
+      Description: SQS Queue URL for Peru
+      Value: !GetAtt QueuePE.QueueUrl
+    QueueCLUrl:
+      Description: SQS Queue URL for Chile
+      Value: !GetAtt QueueCL.QueueUrl

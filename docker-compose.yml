@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: medical-api-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,sns,sqs,events
+      - DEBUG=0
+      - PERSISTENCE=0
+    volumes:
+      - localstack_data:/var/lib/localstack
+    networks:
+      - medical-api-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    image: mysql:8.0
+    container_name: medical-api-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      # Note: The init script creates both databases (medical_appointments_pe and medical_appointments_cl)
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init-database.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - medical-api-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+volumes:
+  mysql_data:
+  localstack_data:
+
+networks:
+  medical-api-network:
+    driver: bridge
