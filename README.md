@@ -61,15 +61,20 @@ POST /appointments
 
 ## Cómo correrlo en local
 
-**Requisitos:**
+### Requisitos
+
 - Docker y Docker Compose
 - Node.js 18+
 - AWS CLI
+- jq (para el test E2E)
 
 **Windows:** Usar Git Bash para correr los comandos.
 
-**Pasos:**
+### Pasos
 
+1. Asegúrate de tener Docker corriendo
+
+2. Instalar dependencias y levantar el servidor:
 ```bash
 npm install
 npm run start:local
@@ -77,8 +82,7 @@ npm run start:local
 
 Eso levanta todo automáticamente: Docker (LocalStack + MySQL), crea las tablas en DynamoDB, el topic SNS, y arranca el servidor en `http://localhost:3000/local`.
 
-**Probar los endpoints:**
-
+3. **En otra terminal**, probar los endpoints:
 ```bash
 # Crear cita
 curl -X POST http://localhost:3000/local/appointments \
@@ -89,13 +93,23 @@ curl -X POST http://localhost:3000/local/appointments \
 curl http://localhost:3000/local/appointments/00001
 ```
 
-**Probar el flujo completo (E2E):**
+### Probar el flujo completo (E2E)
+
+Con el servidor corriendo (paso 2), en otra terminal ejecutar:
 
 ```bash
 npm run test:e2e
 ```
 
-**Detener todo:**
+Este test verifica automáticamente todo el flujo:
+- POST crea la cita en DynamoDB (status: pending)
+- SNS enruta al SQS del país correcto
+- Lambda procesa y guarda en MySQL
+- EventBridge notifica la confirmación
+- Lambda actualiza DynamoDB (status: completed)
+- GET retorna la cita con status completed
+
+### Detener todo
 
 ```bash
 npm run docker:down
