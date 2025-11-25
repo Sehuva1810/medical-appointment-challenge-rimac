@@ -96,10 +96,7 @@ Esto levanta LocalStack (emula servicios AWS) y MySQL.
 **Pasos:**
 
 ```bash
-# Copiar el archivo de variables de entorno
-cp .env.example .env
-
-# Levantar todo
+# Levantar todo (el .env ya viene configurado)
 npm run start:local
 ```
 
@@ -221,4 +218,4 @@ RDS_CL_USERNAME=...
 RDS_CL_PASSWORD=...
 ```
 
-Para local, usa `cp .env.example .env` y listo.
+Para local ya viene el `.env` configurado, no necesitas hacer nada.

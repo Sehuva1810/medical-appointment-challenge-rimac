@@ -11,10 +11,9 @@ dist/
 # Coverage
 coverage/
 
-# Archivos de entorno
-.env
-.env.local
-.env.*.local
+# Archivos de entorno (solo ignorar producción)
+.env.production
+.env.prod
 
 # Logs
 *.log
