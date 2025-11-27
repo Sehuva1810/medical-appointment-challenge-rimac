@@ -86,7 +86,7 @@ jobs:
         run: npm run build
 
       - name: Guardar artefactos
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: dist
           path: dist/
