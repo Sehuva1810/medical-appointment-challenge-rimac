@@ -57,7 +57,7 @@ jobs:
         run: npm run test:cov
 
       - name: Subir reporte de cobertura
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/lcov.info
