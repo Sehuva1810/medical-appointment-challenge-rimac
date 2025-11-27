@@ -1,0 +1,38 @@
+# CODEOWNERS - Medical Appointments API
+# Defines code ownership for pull request reviews
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @medical-team/backend
+
+# Domain Layer - Core business logic (requires senior review)
+/src/domain/ @medical-team/architects @medical-team/backend-senior
+
+# Infrastructure - AWS/CDK changes (requires DevOps review)
+/infra/ @medical-team/devops @medical-team/architects
+/src/infrastructure/ @medical-team/devops @medical-team/backend
+
+# Application Layer - Business use cases
+/src/application/ @medical-team/backend
+
+# Presentation Layer - API contracts
+/src/presentation/ @medical-team/backend
+/docs/openapi.yaml @medical-team/backend @medical-team/frontend
+
+# Lambda handlers
+/src/lambdas/ @medical-team/backend @medical-team/devops
+
+# CI/CD and GitHub workflows
+/.github/ @medical-team/devops
+
+# Security-sensitive files
+/src/presentation/guards/ @medical-team/security @medical-team/backend-senior
+/src/infrastructure/config/ @medical-team/devops @medical-team/security
+
+# Documentation
+/docs/ @medical-team/architects
+/README.md @medical-team/backend
+/CONTRIBUTING.md @medical-team/backend
+
+# Tests
+/test/ @medical-team/backend @medical-team/qa

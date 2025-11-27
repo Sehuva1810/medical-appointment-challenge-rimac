@@ -1,135 +1,104 @@
-# Medical Appointment API
+# Medical Appointments API
 
-API serverless para agendar citas médicas. Soporta asegurados de Perú y Chile.
+API serverless para gestión de citas médicas con arquitectura orientada a eventos (AWS).
 
 ## Arquitectura
 
 ```
-POST /appointments
-       │
-       ▼
-┌─────────────────┐
-│    DynamoDB     │  ← Guarda con status "pending"
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│      SNS        │  ← Filtra por país (PE o CL)
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌───────┐ ┌───────┐
-│SQS_PE │ │SQS_CL │
-└───┬───┘ └───┬───┘
-    │         │
-    ▼         ▼
-┌───────┐ ┌───────┐
-│Lambda │ │Lambda │  ← Cada país tiene su lambda
-│  PE   │ │  CL   │
-└───┬───┘ └───┬───┘
-    │         │
-    └────┬────┘
-         ▼
-┌─────────────────┐
-│  MySQL (RDS)    │  ← Guarda en BD por país
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  EventBridge    │  ← Notifica que terminó
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ SQS Confirmation│
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│Lambda Confirm   │  ← Actualiza DynamoDB a "completed"
-└─────────────────┘
+Cliente → API Gateway → Lambda (NestJS) → DynamoDB (pending)
+                                        ↓
+                                       SNS (filtro por país)
+                                        ↓
+                    ┌───────────────────┴───────────────────┐
+                    ↓                                       ↓
+               SQS (PE)                                SQS (CL)
+                    ↓                                       ↓
+            Lambda PE → MySQL PE                   Lambda CL → MySQL CL
+                    ↓                                       ↓
+                    └───────────→ EventBridge ←─────────────┘
+                                       ↓
+                              Lambda Confirmación
+                                       ↓
+                              DynamoDB (completed)
 ```
 
-## Tecnologías
+## Stack Tecnológico
 
-- Node.js 18+
-- TypeScript
-- Serverless Framework
-- DynamoDB + MySQL
-- SNS, SQS, EventBridge
+| Categoría | Tecnología |
+|-----------|------------|
+| Framework | NestJS 10 + TypeScript |
+| Arquitectura | CQRS, DDD, Clean Architecture |
+| IaC | AWS CDK |
+| Base de datos | DynamoDB, MySQL (RDS) |
+| Mensajería | SNS, SQS, EventBridge |
+| Testing | Jest (80% coverage) |
 
-## Cómo correrlo en local
+## Quick Start
 
-### Requisitos
+### 1. Prerrequisitos
 
-- Docker y Docker Compose
-- Node.js 18+
-- AWS CLI
-- jq (para el test E2E)
+```bash
+node --version  # Node 18+ requerido
+```
 
-**Windows:** Usar Git Bash para correr los comandos.
+### 2. Instalar dependencias
 
-### Pasos
-
-1. Asegúrate de tener Docker corriendo
-
-2. Instalar dependencias y levantar el servidor:
 ```bash
 npm install
-npm run start:local
 ```
 
-Eso levanta todo automáticamente: Docker (LocalStack + MySQL), crea las tablas en DynamoDB, el topic SNS, y arranca el servidor en `http://localhost:3000/local`.
+### 3. Iniciar servidor
 
-3. **En otra terminal**, probar los endpoints:
 ```bash
-# Crear cita
-curl -X POST http://localhost:3000/local/appointments \
+# Modo rápido (sin Docker) - recomendado para evaluación
+npm run start:dev
+```
+
+### 4. Probar la API
+
+**Opción A: Swagger UI**
+```
+http://localhost:3000/docs
+```
+
+**Opción B: Script de prueba**
+```bash
+# En otra terminal (mientras el servidor corre)
+./scripts/test-flow.sh
+```
+
+**Opción C: curl manual**
+```bash
+# Crear cita para Perú
+curl -X POST http://localhost:3000/api/v1/appointments \
   -H "Content-Type: application/json" \
   -d '{"insuredId": "00001", "scheduleId": 100, "countryISO": "PE"}'
 
-# Consultar citas
-curl http://localhost:3000/local/appointments/00001
+# Crear cita para Chile
+curl -X POST http://localhost:3000/api/v1/appointments \
+  -H "Content-Type: application/json" \
+  -d '{"insuredId": "00001", "scheduleId": 200, "countryISO": "CL"}'
+
+# Consultar citas de un asegurado
+curl http://localhost:3000/api/v1/appointments/00001
 ```
 
-### Probar el flujo completo (E2E)
+## API Endpoints
 
-Con el servidor corriendo (paso 2), en otra terminal ejecutar:
+### POST /api/v1/appointments
 
-```bash
-npm run test:e2e
-```
+Crea una nueva cita médica (proceso asíncrono).
 
-Este test verifica automáticamente todo el flujo:
-- POST crea la cita en DynamoDB (status: pending)
-- SNS enruta al SQS del país correcto
-- Lambda procesa y guarda en MySQL
-- EventBridge notifica la confirmación
-- Lambda actualiza DynamoDB (status: completed)
-- GET retorna la cita con status completed
-
-### Detener todo
-
-```bash
-npm run docker:down
-```
-
-## Endpoints
-
-### POST /appointments
-
-Crea una cita.
-
+**Request:**
 ```json
 {
-  "insuredId": "00001",
-  "scheduleId": 100,
-  "countryISO": "PE"
+  "insuredId": "00001",    // 5 dígitos exactos
+  "scheduleId": 100,       // número positivo
+  "countryISO": "PE"       // "PE" o "CL"
 }
 ```
 
-Respuesta (202):
+**Response (202):**
 ```json
 {
   "message": "Appointment scheduling is in process",
@@ -137,10 +106,11 @@ Respuesta (202):
 }
 ```
 
-### GET /appointments/{insuredId}
+### GET /api/v1/appointments/{insuredId}
 
 Obtiene las citas de un asegurado.
 
+**Response (200):**
 ```json
 {
   "appointments": [
@@ -149,42 +119,135 @@ Obtiene las citas de un asegurado.
       "insuredId": "00001",
       "scheduleId": 100,
       "countryISO": "PE",
-      "status": "completed",
+      "status": "pending",
       "createdAt": "2024-10-15T10:30:00.000Z",
-      "updatedAt": "2024-10-15T10:31:00.000Z"
+      "updatedAt": "2024-10-15T10:30:00.000Z"
     }
   ],
   "total": 1
 }
 ```
 
-## Validaciones
-
-- `insuredId`: exactamente 5 dígitos (ej: "00001", "12345")
-- `countryISO`: solo "PE" o "CL"
-- `scheduleId`: número
-
-## Tests unitarios
+## Testing
 
 ```bash
+# Tests unitarios
 npm test
+
+# Tests con cobertura
+npm run test:cov
 ```
 
-## Estructura del proyecto
-
-Usa Clean Architecture:
+## Estructura del Proyecto
 
 ```
 src/
-├── domain/           # Entidades y reglas de negocio
-├── application/      # Casos de uso
-├── infrastructure/   # DynamoDB, MySQL, SNS, etc
-└── interfaces/       # Handlers de Lambda
+├── domain/                 # Capa de Dominio (DDD)
+│   ├── entities/           # Aggregate Roots
+│   ├── value-objects/      # InsuredId, CountryISO, AppointmentStatus
+│   ├── events/             # Domain Events
+│   ├── repositories/       # Interfaces
+│   └── exceptions/         # Excepciones de dominio
+│
+├── application/            # Capa de Aplicación (CQRS)
+│   ├── commands/           # CreateAppointment, ProcessAppointment
+│   ├── queries/            # GetAppointments
+│   ├── handlers/           # Command/Query Handlers
+│   └── dto/                # Data Transfer Objects
+│
+├── infrastructure/         # Capa de Infraestructura
+│   ├── persistence/        # DynamoDB, MySQL, In-Memory
+│   ├── messaging/          # SNS, EventBridge, Console
+│   └── config/             # AWS Config
+│
+├── presentation/           # Capa de Presentación
+│   ├── controllers/        # REST Controllers
+│   ├── guards/             # API Key Guard
+│   ├── interceptors/       # Logging
+│   └── filters/            # Exception Filters
+│
+└── lambdas/                # Lambda Handlers
+    ├── country-processor   # Procesa por país
+    └── confirmation        # Confirma en DynamoDB
 ```
 
-## Deploy a AWS
+## Patrones Implementados
+
+- **CQRS**: Separación de comandos y queries
+- **DDD**: Value Objects, Entities, Aggregate Roots, Domain Events
+- **Repository Pattern**: Abstracción de persistencia
+- **Factory Pattern**: Creación de repositorios MySQL por país
+- **Clean Architecture**: Capas independientes y testables
+
+## Modos de Ejecución
+
+| Modo | Comando | Descripción |
+|------|---------|-------------|
+| **Dev (rápido)** | `npm run start:dev` | In-Memory + Console logs (sin Docker) |
+| **Local completo** | `npm run start:local` | Docker + LocalStack + MySQL |
+| **Producción** | `npm run cdk:deploy:prod` | AWS real |
+
+## Flujo del Sistema
+
+1. **POST /appointments** recibe la petición
+2. Se crea la entidad `Appointment` con validaciones de dominio
+3. Se guarda en **DynamoDB** con status `pending`
+4. Se publica mensaje en **SNS** con atributo `countryISO`
+5. **SNS** filtra y enruta al **SQS** correspondiente (PE o CL)
+6. **Lambda del país** procesa y guarda en **MySQL**
+7. Se emite evento en **EventBridge** (`appointment.completed`)
+8. **Lambda de confirmación** actualiza **DynamoDB** a `completed`
+
+## Validaciones
+
+| Campo | Regla |
+|-------|-------|
+| `insuredId` | Exactamente 5 dígitos (ej: "00001") |
+| `scheduleId` | Número entero positivo |
+| `countryISO` | Solo "PE" o "CL" |
+
+## Logs del Flujo
+
+Al ejecutar en modo desarrollo, verás logs detallados:
+
+```
+[CreateAppointmentHandler] Procesando creación de cita - InsuredId: 00001, Country: PE
+[CreateAppointmentHandler] Cita creada con ID: uuid-xxx
+[InMemoryAppointmentRepository] [IN-MEMORY] Saving appointment: uuid-xxx
+[ConsoleMessagePublisher] 📤 [CONSOLE] Message Published (simulated):
+   Appointment ID: uuid-xxx
+   Country: PE
+   → Would route to: appointments-pe-queue
+```
+
+## Documentación Adicional
+
+- `docs/adr/` - Architecture Decision Records
+- `docs/diagrams/` - Diagramas C4 y UML
+- `/docs` endpoint - Swagger UI (solo en dev)
+
+## Comandos Útiles
 
 ```bash
-npm run deploy:dev
-npm run deploy:prod
+# Desarrollo
+npm run start:dev       # Servidor en modo watch
+npm run build           # Compilar TypeScript
+npm run lint            # Verificar código
+
+# Testing
+npm test                # Tests unitarios
+npm run test:cov        # Tests con cobertura
+./scripts/test-flow.sh  # Test del flujo completo
+
+# Docker (modo completo)
+npm run docker:up       # Levantar LocalStack + MySQL
+npm run docker:down     # Detener contenedores
+
+# CDK (deploy)
+npm run cdk:synth       # Generar CloudFormation
+npm run cdk:deploy:dev  # Deploy a dev
 ```
+
+## Licencia
+
+MIT

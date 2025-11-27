@@ -1,163 +1,111 @@
 #!/bin/bash
-
-# =============================================================================
-# Start Local Development Environment
-# Single script to start everything needed for testing with LocalStack
-# =============================================================================
+# Script para iniciar el ambiente de desarrollo local
+# Levanta Docker, inicializa LocalStack y arranca NestJS
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+echo "=================================================="
+echo "Medical Appointments API - Ambiente Local"
+echo "=================================================="
 
-cd "$PROJECT_DIR"
-
-# Colors
+# Colores para output
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-# AWS credentials for LocalStack (required to avoid security token errors)
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-export AWS_DEFAULT_REGION=us-east-1
-
-echo "=========================================="
-echo "Medical Appointment API - Local Start"
-echo "=========================================="
-
-# =============================================================================
-# Step 0: Setup Node.js version (if nvm is available)
-# =============================================================================
-if [ -f "$HOME/.nvm/nvm.sh" ]; then
-    source "$HOME/.nvm/nvm.sh"
-    if nvm list 22 > /dev/null 2>&1; then
-        echo -e "${YELLOW}→ Switching to Node.js 22...${NC}"
-        nvm use 22
-        echo -e "${GREEN}✓ Using Node.js $(node --version)${NC}"
-    fi
-fi
-
-# =============================================================================
-# Step 1: Check if Docker is running
-# =============================================================================
-if ! docker info > /dev/null 2>&1; then
-    echo -e "${RED}Error: Docker is not running. Please start Docker first.${NC}"
+# Verificar Docker
+if ! command -v docker &> /dev/null; then
+    echo -e "${RED}Error: Docker no está instalado${NC}"
     exit 1
 fi
 
-# =============================================================================
-# Step 2: Start Docker containers if not running
-# =============================================================================
-echo -e "${YELLOW}→ Checking Docker containers...${NC}"
-
-if ! docker ps | grep -q medical-api-localstack; then
-    echo "  Starting Docker containers..."
-    docker-compose up -d
-
-    echo "  Waiting for containers to be ready..."
-    sleep 10
-else
-    echo -e "${GREEN}✓ Containers already running${NC}"
+if ! docker info &> /dev/null; then
+    echo -e "${RED}Error: Docker no está corriendo. Por favor inicia Docker.${NC}"
+    exit 1
 fi
 
-# =============================================================================
-# Step 3: Wait for LocalStack
-# =============================================================================
-echo -e "${YELLOW}→ Waiting for LocalStack...${NC}"
+echo -e "${GREEN}Docker está corriendo...${NC}"
 
-MAX_ATTEMPTS=30
-ATTEMPT=0
+# Detener contenedores anteriores
+echo -e "${YELLOW}Deteniendo contenedores anteriores...${NC}"
+docker-compose down -v 2>/dev/null || true
 
-while ! curl -s http://localhost:4566/_localstack/health 2>/dev/null | grep -qE '"dynamodb":\s*"(available|running)"'; do
-    ATTEMPT=$((ATTEMPT + 1))
-    if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
-        echo -e "${RED}LocalStack did not become ready in time${NC}"
-        exit 1
+# Levantar contenedores
+echo -e "${YELLOW}Levantando contenedores Docker...${NC}"
+docker-compose up -d
+
+# Esperar a que LocalStack esté listo
+echo -e "${YELLOW}Esperando a que LocalStack esté listo...${NC}"
+max_attempts=30
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if curl -s http://localhost:4566/_localstack/health | grep -q '"dynamodb": "available"'; then
+        echo -e "${GREEN}LocalStack está listo!${NC}"
+        break
     fi
+    attempt=$((attempt + 1))
+    echo "Intento $attempt de $max_attempts..."
     sleep 2
 done
 
-echo -e "${GREEN}✓ LocalStack is ready${NC}"
-
-# =============================================================================
-# Step 4: Create AWS resources if they don't exist
-# =============================================================================
-echo -e "${YELLOW}→ Setting up AWS resources in LocalStack...${NC}"
-
-# Create DynamoDB table
-aws --endpoint-url=http://localhost:4566 dynamodb describe-table \
-    --table-name medical-appointment-api-appointments-local \
-    --region us-east-1 > /dev/null 2>&1 || \
-aws --endpoint-url=http://localhost:4566 dynamodb create-table \
-    --table-name medical-appointment-api-appointments-local \
-    --attribute-definitions \
-        AttributeName=appointmentId,AttributeType=S \
-        AttributeName=insuredId,AttributeType=S \
-        AttributeName=createdAt,AttributeType=S \
-    --key-schema \
-        AttributeName=appointmentId,KeyType=HASH \
-    --global-secondary-indexes \
-        '[{"IndexName":"insuredId-createdAt-index","KeySchema":[{"AttributeName":"insuredId","KeyType":"HASH"},{"AttributeName":"createdAt","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}]' \
-    --billing-mode PAY_PER_REQUEST \
-    --region us-east-1 > /dev/null 2>&1
-
-# Create SNS Topic
-aws --endpoint-url=http://localhost:4566 sns create-topic \
-    --name medical-appointment-api-appointments-local \
-    --region us-east-1 > /dev/null 2>&1 || true
-
-echo -e "${GREEN}✓ AWS resources ready${NC}"
-
-# =============================================================================
-# Step 5: Kill any existing processes on ports 3000 and 3002
-# =============================================================================
-echo -e "${YELLOW}→ Checking for port conflicts...${NC}"
-lsof -ti:3000,3002 2>/dev/null | xargs kill -9 2>/dev/null || true
-sleep 1
-echo -e "${GREEN}✓ Ports available${NC}"
-
-# =============================================================================
-# Step 6: Start serverless offline
-# =============================================================================
-echo ""
-echo "=========================================="
-echo -e "${GREEN}Starting API Server...${NC}"
-echo "=========================================="
-echo ""
-echo "API will be available at: http://localhost:3000/local"
-echo ""
-echo "Test endpoints:"
-echo "  POST http://localhost:3000/local/appointments"
-echo "  GET  http://localhost:3000/local/appointments/{insuredId}"
-echo ""
-echo "Example curl commands:"
-echo ""
-echo '  # Create appointment (Peru)'
-echo '  curl -X POST http://localhost:3000/local/appointments \'
-echo '    -H "Content-Type: application/json" \'
-echo '    -d '\''{"insuredId": "00001", "scheduleId": 100, "countryISO": "PE"}'\'''
-echo ""
-echo '  # Create appointment (Chile)'
-echo '  curl -X POST http://localhost:3000/local/appointments \'
-echo '    -H "Content-Type: application/json" \'
-echo '    -d '\''{"insuredId": "00002", "scheduleId": 200, "countryISO": "CL"}'\'''
-echo ""
-echo '  # Get appointments'
-echo '  curl http://localhost:3000/local/appointments/00001'
-echo ""
-echo "Press Ctrl+C to stop the server"
-echo "=========================================="
-echo ""
-
-# Load .env file and start serverless offline with 'local' stage
-if [ -f "$PROJECT_DIR/.env" ]; then
-    echo -e "${YELLOW}→ Loading .env file...${NC}"
-    set -a
-    source "$PROJECT_DIR/.env"
-    set +a
-    echo -e "${GREEN}✓ Environment variables loaded${NC}"
+if [ $attempt -eq $max_attempts ]; then
+    echo -e "${RED}Error: LocalStack no respondió a tiempo${NC}"
+    exit 1
 fi
 
-npm run offline -- --stage local
+# Esperar a MySQL
+echo -e "${YELLOW}Esperando a que MySQL esté listo...${NC}"
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if docker exec medical-api-mysql mysqladmin ping -h localhost --silent 2>/dev/null; then
+        echo -e "${GREEN}MySQL está listo!${NC}"
+        break
+    fi
+    attempt=$((attempt + 1))
+    echo "Intento $attempt de $max_attempts..."
+    sleep 2
+done
+
+# Inicializar recursos de LocalStack
+echo -e "${YELLOW}Inicializando recursos AWS en LocalStack...${NC}"
+chmod +x ./scripts/localstack-init.sh
+./scripts/localstack-init.sh
+
+# Instalar dependencias si es necesario
+if [ ! -d "node_modules" ]; then
+    echo -e "${YELLOW}Instalando dependencias...${NC}"
+    npm install
+fi
+
+# Compilar proyecto
+echo -e "${YELLOW}Compilando proyecto...${NC}"
+npm run build
+
+# Configurar variables de entorno para LocalStack
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=us-east-1
+export STAGE=local
+
+# Iniciar servidor NestJS
+echo ""
+echo -e "${GREEN}=================================================="
+echo "Servidor listo!"
+echo "==================================================${NC}"
+echo ""
+echo "API: http://localhost:3000/api/v1"
+echo "Swagger: http://localhost:3000/docs"
+echo ""
+echo "Endpoints disponibles:"
+echo "  POST /api/v1/appointments - Crear cita"
+echo "  GET /api/v1/appointments/:insuredId - Obtener citas"
+echo ""
+echo "Usando servicios reales:"
+echo "  - DynamoDB (LocalStack): $AWS_ENDPOINT_URL"
+echo "  - SNS/SQS (LocalStack): $AWS_ENDPOINT_URL"
+echo "  - MySQL: localhost:3306"
+echo ""
+
+npm run start:dev

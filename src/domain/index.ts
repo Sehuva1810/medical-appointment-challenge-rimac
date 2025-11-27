@@ -1,13 +1,17 @@
 // Entities
-export * from './entities/Appointment';
+export * from './entities/appointment.entity';
 
 // Value Objects
-export * from './value-objects/AppointmentStatus';
-export * from './value-objects/CountryISO';
-export * from './value-objects/InsuredId';
+export * from './value-objects';
 
-// Repository Interfaces
-export * from './repositories/IAppointmentRepository';
-export * from './repositories/IEventPublisher';
-export * from './repositories/IMessagePublisher';
-export * from './repositories/IMySQLAppointmentRepository';
+// Events
+export * from './events/appointment.events';
+
+// Repositories
+export * from './repositories/appointment.repository.interface';
+export * from './repositories/mysql-appointment.repository.interface';
+export * from './repositories/event-publisher.interface';
+export * from './repositories/message-publisher.interface';
+
+// Exceptions
+export * from './exceptions/domain.exception';
