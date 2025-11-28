@@ -22,10 +22,15 @@ POST /appointments → DynamoDB (pending) → SNS → SQS (PE/CL) → MySQL → 
 npm install
 
 # 2. Levantar LocalStack + MySQL + App
-./scripts/start-local.sh
+npm run start:local
 
 # 3. Probar el flujo completo (en otra terminal)
 ./scripts/test-flow.sh
+```
+
+Los logs muestran el flujo completo ejecutándose:
+```
+DynamoDB (pending) → SNS → SQS → Lambda → MySQL → EventBridge → DynamoDB (completed)
 ```
 
 ## Probar manualmente
